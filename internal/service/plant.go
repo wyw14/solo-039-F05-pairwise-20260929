@@ -227,9 +227,10 @@ func (p *Plant) AcquireReflux(owner string, amount float64) (model.Lease, error)
 func (p *Plant) Shutdown(ctx context.Context, reliefTimeout bool) (relief.ShutdownResult, error) {
 	current := p.Campaign.Advance(model.Shutting)
 	reliefErr := p.Relief.Shutdown(ctx, current, "flare", reliefTimeout)
-	steamErr := p.ReboilerCommands.Close(ctx, p.Reboiler, current)
+	steamRecord, steamErr := p.ReboilerCommands.Close(ctx, p.Reboiler, current)
 	p.ReboilerTelemetry.Record(p.Reboiler.Snapshot())
-	result := relief.CombineShutdown(reliefErr, steamErr, p.Relief.State.Snapshot(), p.Reboiler.ClosureConfirmed(current.Epoch))
+	closure := p.steamClosure(steamRecord, steamErr, current.Epoch)
+	result := relief.CombineShutdownWithReceipt(reliefErr, steamErr, p.Relief.State.Snapshot(), closure)
 	p.ReliefHistory.Record(p.Relief.State.Snapshot(), reliefErr)
 	if err := result.Error(); err != nil {
 		p.Incidents.Open("shutdown", err.Error(), current.Revision.String())
@@ -241,6 +242,28 @@ func (p *Plant) Shutdown(ctx context.Context, reliefTimeout bool) (relief.Shutdo
 	p.started = false
 	p.mu.Unlock()
 	return result, p.record("plant.stopped", "safe")
+}
+
+// steamClosure 将停热命令链当前代次的状态转成停机汇总所需的确认信息。
+// 已确认的代次以阀位回执为准；缺回执、拒动或旧代次未闭合时保留待确认，
+// 并带回为何不能宣告安全的说明。
+func (p *Plant) steamClosure(record reboiler.CommandRecord, closeErr error, epoch uint64) relief.SteamClosure {
+	closure := relief.SteamClosure{Generation: record.Sequence, TargetSteam: record.TargetSteam()}
+	switch record.Status {
+	case reboiler.StatusConfirmed:
+		closure.Closed = p.Reboiler.ClosureConfirmed(epoch)
+		if !closure.Closed {
+			closure.Pending = true
+			closure.Reason = fmt.Sprintf("steam closure generation %d receipt matched but state confirmation for epoch %d was rejected; steam isolation not proven", record.Sequence, epoch)
+		}
+	default:
+		closure.Pending = true
+		closure.Reason = record.ClosureSafetyReason()
+		if closure.Reason == "" && closeErr != nil {
+			closure.Reason = closeErr.Error()
+		}
+	}
+	return closure
 }
 
 func (p *Plant) Snapshot() model.Snapshot {
@@ -284,7 +307,7 @@ func (p *Plant) Status() map[string]any {
 	lastError := p.lastError
 	p.mu.RUnlock()
 	gradient, _ := p.Profile.Gradient()
-	return map[string]any{"started": started, "last_error": lastError, "campaign": p.Campaign.Snapshot(), "column": p.Column.Snapshot(), "reflux_used": p.Reflux.Used(), "products": p.ProductTargets(), "relief": p.Relief.State.Snapshot(), "feed_metrics": p.FeedMetrics.Snapshot(), "reflux_telemetry": p.RefluxTelemetry.Snapshot(), "reboiler_telemetry": p.ReboilerTelemetry.Snapshot(), "product_decisions": p.ProductAudit.Count(), "utility_used": p.UtilityLedger.Used(), "metrics": p.Metrics.Snapshot(), "campaign_changes": p.CampaignHistory.Count(), "profile_gradient": gradient, "profile_stable": p.Profile.Stable(40), "evidence_count": p.Evidence.Count(p.Campaign.Snapshot().Revision.String()), "relief_attempts": p.ReliefHistory.Count(), "open_incidents": p.Incidents.CountOpen(), "operational_audit": p.OperationalAudit()}
+	return map[string]any{"started": started, "last_error": lastError, "campaign": p.Campaign.Snapshot(), "column": p.Column.Snapshot(), "reflux_used": p.Reflux.Used(), "products": p.ProductTargets(), "relief": p.Relief.State.Snapshot(), "reboiler_command_chain": p.ReboilerCommands.Summary(reboiler.SteamValve), "feed_metrics": p.FeedMetrics.Snapshot(), "reflux_telemetry": p.RefluxTelemetry.Snapshot(), "reboiler_telemetry": p.ReboilerTelemetry.Snapshot(), "product_decisions": p.ProductAudit.Count(), "utility_used": p.UtilityLedger.Used(), "metrics": p.Metrics.Snapshot(), "campaign_changes": p.CampaignHistory.Count(), "profile_gradient": gradient, "profile_stable": p.Profile.Stable(40), "evidence_count": p.Evidence.Count(p.Campaign.Snapshot().Revision.String()), "relief_attempts": p.ReliefHistory.Count(), "open_incidents": p.Incidents.CountOpen(), "operational_audit": p.OperationalAudit()}
 }
 
 func (p *Plant) record(kind, payload string) error {

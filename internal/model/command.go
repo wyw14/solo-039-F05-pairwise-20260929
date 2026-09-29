@@ -17,13 +17,18 @@ type Command struct {
 }
 
 type Acknowledgement struct {
-	Command   uuid.UUID
-	Campaign  uuid.UUID
-	Revision  uuid.UUID
-	Epoch     uint64
-	Equipment string
-	State     string
-	Value     float64
+	Command    uuid.UUID
+	Campaign   uuid.UUID
+	Revision   uuid.UUID
+	Epoch      uint64
+	Equipment  string
+	State      string
+	Value      float64
+	ReceivedAt int64
+}
+
+func NewAcknowledgement(c Command, state string, value float64, receivedAt int64) Acknowledgement {
+	return Acknowledgement{Command: c.ID, Campaign: c.Campaign, Revision: c.Revision, Epoch: c.Epoch, Equipment: c.Equipment, State: state, Value: value, ReceivedAt: receivedAt}
 }
 
 func NewCommand(c Campaign, equipment, action string, setpoint float64) Command {
