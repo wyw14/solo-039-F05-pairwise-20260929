@@ -229,7 +229,12 @@ func (p *Plant) Shutdown(ctx context.Context, reliefTimeout bool) (relief.Shutdo
 	reliefErr := p.Relief.Shutdown(ctx, current, "flare", reliefTimeout)
 	steamErr := p.ReboilerCommands.Close(ctx, p.Reboiler, current)
 	p.ReboilerTelemetry.Record(p.Reboiler.Snapshot())
-	result := relief.CombineShutdown(reliefErr, steamErr, p.Relief.State.Snapshot(), p.Reboiler.ClosureConfirmed(current.Epoch))
+	// 关阀是否确认以命令链最新一代的同代次回执为准；缺回执时保留待确认状态，
+	// 并把原因带进停机结果，而不是让旧代次回执冒充新指令的闭合。
+	steamClosed := p.ReboilerCommands.ClosureConfirmed("steam-valve")
+	steamPending := len(p.ReboilerCommands.Pending("steam-valve")) > 0
+	steamReason := p.ReboilerCommands.PendingReason("steam-valve")
+	result := relief.CombineShutdown(reliefErr, steamErr, p.Relief.State.Snapshot(), steamClosed, steamPending, steamReason)
 	p.ReliefHistory.Record(p.Relief.State.Snapshot(), reliefErr)
 	if err := result.Error(); err != nil {
 		p.Incidents.Open("shutdown", err.Error(), current.Revision.String())

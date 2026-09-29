@@ -13,6 +13,10 @@ type ShutdownResult struct {
 	SteamError    error
 	Depressurized bool
 	SteamClosed   bool
+	// SteamPending 表示停热指令已发出但缺少同代次阀位回执；SteamReason
+	// 用一句话说明为什么这种待确认状态下不能宣告停机安全。
+	SteamPending bool
+	SteamReason  string
 }
 
 func NewCoordinator() *Coordinator { return &Coordinator{State: New()} }
@@ -29,15 +33,32 @@ func (c *Coordinator) Shutdown(ctx context.Context, cpg model.Campaign, valve st
 
 func (c *Coordinator) Safe() bool { return c.State.Snapshot().Released && !c.State.Snapshot().TimedOut }
 
-func CombineShutdown(reliefErr, steamErr error, reliefState model.Relief, steamClosed bool) ShutdownResult {
-	return ShutdownResult{ReliefError: reliefErr, SteamError: steamErr, Depressurized: reliefErr == nil && reliefState.Released && !reliefState.TimedOut, SteamClosed: steamErr == nil && steamClosed}
+func CombineShutdown(reliefErr, steamErr error, reliefState model.Relief, steamClosed bool, steamPending bool, steamPendingReason string) ShutdownResult {
+	pending := steamErr == nil && steamPending
+	return ShutdownResult{
+		ReliefError:   reliefErr,
+		SteamError:    steamErr,
+		Depressurized: reliefErr == nil && reliefState.Released && !reliefState.TimedOut,
+		SteamClosed:   steamErr == nil && steamClosed && !pending,
+		SteamPending:  pending,
+		SteamReason:   steamPendingReason,
+	}
 }
 
 func (r ShutdownResult) Error() error {
 	if r.ReliefError != nil {
 		return r.ReliefError
 	}
-	return r.SteamError
+	if r.SteamError != nil {
+		return r.SteamError
+	}
+	// 没有命令错误、但回执仍缺失时，待确认本身就是停机不能放行的原因。
+	if r.SteamPending {
+		return errors.New(r.SteamReason)
+	}
+	return nil
 }
 
-func (r ShutdownResult) Safe() bool { return r.Depressurized && r.SteamClosed && r.Error() == nil }
+func (r ShutdownResult) Safe() bool {
+	return r.Depressurized && r.SteamClosed && !r.SteamPending && r.Error() == nil
+}

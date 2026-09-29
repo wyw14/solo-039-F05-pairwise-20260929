@@ -217,6 +217,9 @@ func (p *Plant) OperationalAudit() map[string]any {
 	reboilerRamp.State.Stop()
 	reboilerRecoverable := reboiler.Recoverable(snapshot.Reboiler, current)
 	reboilerConfirmed := p.ReboilerCommands.Confirmed("steam-valve", "closed")
+	reboilerPending := p.ReboilerCommands.Pending("steam-valve")
+	reboilerPendingReason := p.ReboilerCommands.PendingReason("steam-valve")
+	reboilerChain := p.ReboilerCommands.Audit("steam-valve")
 
 	refluxState := reflux.New()
 	_ = refluxState.Ramp(context.Background(), current, snapshot.Reflux.Ratio, 0)
@@ -242,7 +245,7 @@ func (p *Plant) OperationalAudit() map[string]any {
 	refluxCancelled := refluxAllocator.Cancel(owner)
 
 	reliefSafe := p.Relief.Safe()
-	shutdownResult := relief.CombineShutdown(nil, nil, snapshot.Relief, p.Reboiler.ClosureConfirmed(current.Epoch))
+	shutdownResult := relief.CombineShutdown(nil, nil, snapshot.Relief, reboilerConfirmed, len(reboilerPending) > 0, reboilerPendingReason)
 	shutdownSafe := shutdownResult.Safe()
 	reliefEvaluation := relief.Evaluate(snapshot.Relief, snapshot.Relief.Pressure)
 	reliefEvaluationErr := reliefEvaluation.Error()
@@ -311,9 +314,9 @@ func (p *Plant) OperationalAudit() map[string]any {
 		"journal":   map[string]any{"sequence_error": auditError(sequenceErr), "latest": latestEventPresent, "checkpoint_valid": checkpointValid, "file_path": p.FileLog.Path(), "file_events": len(fileEvents), "file_error": auditError(fileReadErr), "durable_proof": durableProofPresent, "proof_error": auditError(durableProofErr), "recovery_error": auditError(recoveryValidationErr), "recovery_events": len(recoveryEvents), "replay_events": len(replayEvents), "campaign_events": replayedForCampaign, "state_ready": recoveredState.Ready(), "plan_complete": recoveryPlan.Complete(), "generations": len(eventGenerations), "loaded_campaign": loadedSnapshot.Campaign.ID, "load_error": auditError(snapshotLoadErr), "failure_probe_rejected": journalProbeErr != nil},
 		"model":     map[string]any{"plan_error": auditError(planErr), "command_error": auditError(commandErr), "command_key": command.Key(), "ack_matches": ackMatches, "ack_error": auditError(ackErr), "column_limit_error": auditError(columnLimitErr), "energy_limit_error": auditError(energyLimitErr), "safe": limitSafe},
 		"product":   map[string]any{"publish_error": auditError(productPublishErr), "recover_error": auditError(productRecoverErr), "route_error": auditError(productRouteErr), "closed_for_revision": productClose, "transition_error": auditError(productTransitionErr), "durable": productDurable, "routed": productRouted, "recovery_error": auditError(productRecoveryErr), "restore_error": auditError(productRestoreErr), "latest": productLatest, "latest_error": auditError(productLatestErr), "revision_decisions": len(productByRevision), "state_present": productStatePresent, "state_targets": productStateTargets},
-		"reboiler":  map[string]any{"restore_error": auditError(reboilerRestoreErr), "ramp_error": auditError(reboilerRampErr), "trip_error": auditError(reboilerTripErr), "permit": reboilerPermit, "ramp_apply_error": auditError(reboilerRampApplyErr), "recoverable": reboilerRecoverable, "confirmed": reboilerConfirmed},
+		"reboiler":  map[string]any{"restore_error": auditError(reboilerRestoreErr), "ramp_error": auditError(reboilerRampErr), "trip_error": auditError(reboilerTripErr), "permit": reboilerPermit, "ramp_apply_error": auditError(reboilerRampApplyErr), "recoverable": reboilerRecoverable, "confirmed": reboilerConfirmed, "pending": len(reboilerPending), "pending_reason": reboilerPendingReason, "command_chain": reboilerChain},
 		"reflux":    map[string]any{"ramp_error": auditError(refluxRampErr), "submit_error": auditError(refluxSubmitErr), "pending": len(refluxPending), "lease": refluxLease, "next_error": auditError(refluxNextErr), "cancelled": refluxCancelled},
-		"relief":    map[string]any{"safe": reliefSafe, "shutdown_safe": shutdownSafe, "evaluation_error": auditError(reliefEvaluationErr), "evaluation_safe": reliefEvaluationSafe, "latest": reliefLatest, "latest_present": reliefLatestPresent, "failures": len(reliefFailures), "isolate_error": auditError(reliefIsolateErr)},
+		"relief":    map[string]any{"safe": reliefSafe, "shutdown_safe": shutdownSafe, "steam_pending": shutdownResult.SteamPending, "steam_pending_reason": shutdownResult.SteamReason, "evaluation_error": auditError(reliefEvaluationErr), "evaluation_safe": reliefEvaluationSafe, "latest": reliefLatest, "latest_present": reliefLatestPresent, "failures": len(reliefFailures), "isolate_error": auditError(reliefIsolateErr)},
 		"utility":   map[string]any{"reserve_error": auditError(capacityReserveErr), "capacity_used": capacityUsed, "book_present": bookLeasePresent, "book_fenced": bookLeaseFenced, "ledger_active": len(ledgerActive), "ledger_used": ledgerUsed, "revoked": ledgerRevoked, "valid": leaseValid, "can_open": leaseCanOpen},
 		"service":   map[string]any{"run_error": auditError(serviceRunErr), "phase": servicePhase, "runtime_start_error": auditError(runtimeStartErr), "runtime_running": runtimeRunning, "recover_error": auditError(serviceRecoverErr), "ordered_steps": orderedSteps, "ordered_error": auditError(orderedRecoveryErr), "incident_resolved": incidentResolved, "start_failure_rate": p.Metrics.FailureRate("start")},
 	}
